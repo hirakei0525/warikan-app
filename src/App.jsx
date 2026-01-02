@@ -1,8 +1,58 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 
+// ★★★ ここにJSONBin.ioのAPIキーを設定 ★★★
+const JSONBIN_KEY = '$2a$10$7d90hiCCptuoBNJLlUFKluO72mrhvXh5Wd0vgf.KkZV9M0z7ZM6AC';
+
+const API_URL = 'https://api.jsonbin.io/v3/b';
 const generateCode = () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'.split('').sort(() => Math.random() - 0.5).slice(0, 8).join('');
 const getParam = (key) => new URLSearchParams(window.location.search).get(key);
 const amountOptions = [500,1000,1500,2000,2500,3000,3500,4000,4500,5000,5500,6000,6500,7000,7500,8000,8500,9000,9500,10000];
+
+// JSONBin API
+const api = {
+  async save(code, data) {
+    const binId = localStorage.getItem(`bin_${code}`);
+    try {
+      if (binId) {
+        await fetch(`${API_URL}/${binId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY },
+          body: JSON.stringify({ code, ...data, updatedAt: Date.now() })
+        });
+      } else {
+        const res = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY, 'X-Bin-Name': code },
+          body: JSON.stringify({ code, ...data, updatedAt: Date.now() })
+        });
+        const json = await res.json();
+        if (json.metadata?.id) localStorage.setItem(`bin_${code}`, json.metadata.id);
+      }
+      return true;
+    } catch (e) { console.error('Save error:', e); return false; }
+  },
+  async load(code) {
+    try {
+      // まずローカルからbinIdを取得
+      let binId = localStorage.getItem(`bin_${code}`);
+      if (binId) {
+        const res = await fetch(`${API_URL}/${binId}/latest`, { headers: { 'X-Master-Key': JSONBIN_KEY } });
+        const json = await res.json();
+        return json.record;
+      }
+      // binIdがない場合は検索（コードで）
+      const searchRes = await fetch(`https://api.jsonbin.io/v3/c/uncategorized/bins`, { headers: { 'X-Master-Key': JSONBIN_KEY } });
+      const bins = await searchRes.json();
+      const found = bins.find?.(b => b.snippetMeta?.name === code);
+      if (found) {
+        localStorage.setItem(`bin_${code}`, found.id);
+        const res = await fetch(`${API_URL}/${found.id}/latest`, { headers: { 'X-Master-Key': JSONBIN_KEY } });
+        return (await res.json()).record;
+      }
+      return null;
+    } catch (e) { console.error('Load error:', e); return null; }
+  }
+};
 
 export default function App() {
   const [code, setCode] = useState(() => getParam('code') || generateCode());
@@ -19,35 +69,65 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [viewRec, setViewRec] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
   const fileRef = useRef(null);
   const init = useRef(false);
+  const saveTimer = useRef(null);
 
-  // URL からデータ読み込み
+  // 初回読み込み
   useEffect(() => {
-    const d = getParam('d');
-    if (d) {
-      try {
-        const json = JSON.parse(decodeURIComponent(atob(d)));
-        setParticipants(json.p || []);
-        setPayments((json.y || []).map(x => ({...x, receipt: null})));
-        setMethod(json.m || 'equal');
-        setFixed(json.f || {});
-        setZero(json.z || {});
-      } catch {}
-    }
-    if (!getParam('code')) window.history.replaceState({}, '', `?code=${code}`);
-    setLoading(false);
-    init.current = true;
+    const load = async () => {
+      const urlCode = getParam('code');
+      if (urlCode) setCode(urlCode);
+      const c = urlCode || code;
+      
+      const data = await api.load(c);
+      if (data) {
+        setParticipants(data.participants || []);
+        setPayments(data.payments || []);
+        setMethod(data.method || 'equal');
+        setFixed(data.fixed || {});
+        setZero(data.zero || {});
+        setLastSync(data.updatedAt);
+      }
+      
+      if (!urlCode) window.history.replaceState({}, '', `?code=${c}`);
+      setLoading(false);
+      init.current = true;
+    };
+    load();
   }, []);
 
-  // データをURLに反映
-  const getShareUrl = () => {
-    const d = btoa(encodeURIComponent(JSON.stringify({
-      p: participants,
-      y: payments.map(x => ({...x, receipt: null})),
-      m: method, f: fixed, z: zero
-    })));
-    return `${location.origin}${location.pathname}?code=${code}&d=${d}`;
+  // 自動保存（デバウンス）
+  const saveData = useCallback(async () => {
+    if (!init.current) return;
+    setSaving(true);
+    const data = { participants, payments: payments.map(p => ({...p, receipt: null})), method, fixed, zero };
+    await api.save(code, data);
+    setSaving(false);
+    setLastSync(Date.now());
+  }, [code, participants, payments, method, fixed, zero]);
+
+  useEffect(() => {
+    if (!init.current) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(saveData, 1000);
+  }, [participants, payments, method, fixed, zero, saveData]);
+
+  // 手動で最新データを取得
+  const refresh = async () => {
+    setLoading(true);
+    const data = await api.load(code);
+    if (data) {
+      setParticipants(data.participants || []);
+      setPayments(data.payments || []);
+      setMethod(data.method || 'equal');
+      setFixed(data.fixed || {});
+      setZero(data.zero || {});
+      setLastSync(data.updatedAt);
+    }
+    setLoading(false);
   };
 
   const addP = () => {
@@ -68,7 +148,14 @@ export default function App() {
 
   const edit = (p) => { setForm({ payer: p.payer, desc: p.desc, amount: ''+p.amount, mode:'free', receipt: p.receipt, receiptName: p.receiptName||'', excl: [...(p.excl||[])] }); setEditId(p.id); setShowForm(true); };
 
-  const reset = () => { if (confirm('リセット？')) { setParticipants([]); setPayments([]); setFixed({}); setZero({}); setShowRes(false); setCode(generateCode()); window.history.replaceState({}, '', `?code=${generateCode()}`); }};
+  const reset = () => { 
+    if (confirm('リセット？')) { 
+      const newCode = generateCode();
+      setParticipants([]); setPayments([]); setFixed({}); setZero({}); setShowRes(false); 
+      setCode(newCode); 
+      window.history.replaceState({}, '', `?code=${newCode}`);
+    }
+  };
 
   const eqShare = () => {
     const s = {}; participants.forEach(p => s[p.id] = 0);
@@ -112,16 +199,19 @@ export default function App() {
   };
 
   const res = calc(), eq = eqShare();
-  const copy = () => { navigator.clipboard.writeText(getShareUrl()); setCopied(true); setTimeout(() => setCopied(false), 2000); };
+  const copy = () => { 
+    navigator.clipboard.writeText(`${location.origin}${location.pathname}?code=${code}`); 
+    setCopied(true); setTimeout(() => setCopied(false), 2000); 
+  };
 
   const pdf = () => {
     if (!res) return;
     const w = window.open('','_blank');
-    w.document.write(`<html><head><meta charset="utf-8"><title>精算</title><style>body{font-family:sans-serif;padding:20px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ddd;padding:8px}th{background:#f5f5f5}.s{background:#d1fae5;padding:15px;border-radius:8px;margin:10px 0}</style></head><body><h1>💰精算レポート</h1><p>コード:${code} / ${new Date().toLocaleString('ja-JP')}</p><h2>支払い</h2><table><tr><th>内容</th><th>支払者</th><th>金額</th></tr>${payments.map(p=>`<tr><td>${p.desc}</td><td>${participants.find(x=>x.id===p.payer)?.name}</td><td>${p.amount.toLocaleString()}円</td></tr>`).join('')}</table><h2>結果</h2><table><tr><th>名前</th><th>支払</th><th>負担</th></tr>${participants.map(p=>`<tr><td>${p.name}</td><td>${(res.paid[p.id]||0).toLocaleString()}円</td><td>${(res.should[p.id]||0).toLocaleString()}円</td></tr>`).join('')}</table><h2>送金</h2>${res.set.map(s=>`<div class="s">${s.from}→${s.to}: ${s.amount.toLocaleString()}円</div>`).join('')||'精算不要'}<br><button onclick="print()">🖨️印刷</button></body></html>`);
+    w.document.write(`<html><head><meta charset="utf-8"><title>精算</title><style>body{font-family:sans-serif;padding:20px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ddd;padding:8px}th{background:#f5f5f5}.s{background:#d1fae5;padding:15px;border-radius:8px;margin:10px 0}</style></head><body><h1>💰精算レポート</h1><p>コード:${code}</p><h2>支払い</h2><table><tr><th>内容</th><th>支払者</th><th>金額</th></tr>${payments.map(p=>`<tr><td>${p.desc}</td><td>${participants.find(x=>x.id===p.payer)?.name}</td><td>${p.amount.toLocaleString()}円</td></tr>`).join('')}</table><h2>結果</h2><table><tr><th>名前</th><th>支払</th><th>負担</th></tr>${participants.map(p=>`<tr><td>${p.name}</td><td>${(res.paid[p.id]||0).toLocaleString()}円</td><td>${(res.should[p.id]||0).toLocaleString()}円</td></tr>`).join('')}</table><h2>送金</h2>${res.set.map(s=>`<div class="s">${s.from}→${s.to}: ${s.amount.toLocaleString()}円</div>`).join('')||'精算不要'}<button onclick="print()">🖨️印刷</button></body></html>`);
     w.document.close();
   };
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center"><p>読み込み中...</p></div>;
+  if (loading) return <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100"><div className="text-center"><p className="text-lg mb-2">読み込み中...</p><p className="text-sm text-gray-500">精算コード: {code}</p></div></div>;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-2 sm:p-4">
@@ -130,10 +220,18 @@ export default function App() {
           <h1 className="text-xl font-bold text-center text-indigo-600 mb-3">💰 割り勘精算アプリ</h1>
           
           <div className="bg-indigo-50 rounded-lg p-3 mb-4">
-            <span className="text-xs text-gray-500">精算コード</span>
-            <p className="text-xl font-mono font-bold text-indigo-600">{code}</p>
-            <button onClick={copy} className="mt-2 w-full bg-indigo-500 text-white py-2 rounded-lg text-sm">{copied ? '✓コピー済み' : '📋 共有URLコピー'}</button>
-            <p className="text-xs text-gray-400 mt-1 text-center">※データ入力後にコピーしてください</p>
+            <div className="flex justify-between items-start">
+              <div><span className="text-xs text-gray-500">精算コード</span><p className="text-xl font-mono font-bold text-indigo-600">{code}</p></div>
+              <div className="text-right">
+                {saving && <span className="text-xs text-orange-500">保存中...</span>}
+                {!saving && lastSync && <span className="text-xs text-green-600">✓ 同期済</span>}
+              </div>
+            </div>
+            <div className="flex gap-2 mt-2">
+              <button onClick={copy} className="flex-1 bg-indigo-500 text-white py-2 rounded-lg text-sm">{copied ? '✓コピー済' : '📋 URL共有'}</button>
+              <button onClick={refresh} className="bg-gray-200 px-3 py-2 rounded-lg text-sm">🔄</button>
+            </div>
+            <p className="text-xs text-gray-400 mt-1 text-center">データは自動保存・同期されます</p>
           </div>
 
           <div className="mb-4">
@@ -156,11 +254,11 @@ export default function App() {
               <div className="bg-gray-50 rounded-lg p-3 mb-3 space-y-2">
                 <select value={form.payer} onChange={e=>setForm({...form,payer:e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm"><option value="">支払者</option>{participants.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select>
                 <input value={form.desc} onChange={e=>setForm({...form,desc:e.target.value})} placeholder="内容" className="w-full border rounded-lg px-3 py-2 text-sm"/>
-                <div className="flex gap-2 mb-1">
+                <div className="flex gap-2">
                   <button type="button" onClick={()=>setForm({...form,mode:'free'})} className={`flex-1 py-1 rounded text-sm ${form.mode==='free'?'bg-blue-500 text-white':'bg-gray-200'}`}>自由入力</button>
                   <button type="button" onClick={()=>setForm({...form,mode:'select'})} className={`flex-1 py-1 rounded text-sm ${form.mode==='select'?'bg-blue-500 text-white':'bg-gray-200'}`}>500円単位</button>
                 </div>
-                {form.mode==='free'?<input type="number" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} placeholder="金額" className="w-full border rounded-lg px-3 py-2 text-sm"/>:<select value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm"><option value="">金額選択</option>{amountOptions.map(a=><option key={a} value={a}>{a.toLocaleString()}円</option>)}</select>}
+                {form.mode==='free'?<input type="number" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} placeholder="金額" className="w-full border rounded-lg px-3 py-2 text-sm"/>:<select value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm"><option value="">金額</option>{amountOptions.map(a=><option key={a} value={a}>{a.toLocaleString()}円</option>)}</select>}
                 <div className="flex flex-wrap gap-1">{participants.map(p=>(<button key={p.id} type="button" onClick={()=>setForm({...form,excl:form.excl.includes(p.id)?form.excl.filter(x=>x!==p.id):[...form.excl,p.id]})} className={`px-2 py-1 rounded text-xs ${form.excl.includes(p.id)?'bg-red-500 text-white':'bg-gray-200'}`}>{p.name}{form.excl.includes(p.id)&&'✓'}</button>))}</div>
                 <input ref={fileRef} type="file" accept="image/*,.pdf" onChange={e=>{const f=e.target.files?.[0];if(f){const r=new FileReader();r.onload=ev=>setForm({...form,receipt:ev.target.result,receiptName:f.name});r.readAsDataURL(f);}}} className="w-full text-sm"/>
                 <div className="flex gap-2"><button onClick={savePay} className="flex-1 bg-green-500 text-white py-2 rounded-lg text-sm">{editId?'更新':'登録'}</button><button onClick={()=>{setShowForm(false);setEditId(null);setForm({payer:'',desc:'',amount:'',mode:'free',receipt:null,receiptName:'',excl:[]});}} className="flex-1 bg-gray-300 py-2 rounded-lg text-sm">キャンセル</button></div>

@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 const generateCode = () => {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -7,10 +7,15 @@ const generateCode = () => {
   return code;
 };
 
+const getCodeFromURL = () => {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('code');
+};
+
 const amountOptions = [500,1000,1500,2000,2500,3000,3500,4000,4500,5000,5500,6000,6500,7000,7500,8000,8500,9000,9500,10000];
 
 export default function App() {
-  const [sessionCode, setSessionCode] = useState(() => generateCode());
+  const [sessionCode, setSessionCode] = useState(() => getCodeFromURL() || generateCode());
   const [participants, setParticipants] = useState([]);
   const [payments, setPayments] = useState([]);
   const [newName, setNewName] = useState('');
@@ -23,7 +28,71 @@ export default function App() {
   const [showResults, setShowResults] = useState(false);
   const [copied, setCopied] = useState(false);
   const [viewReceipt, setViewReceipt] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [saveStatus, setSaveStatus] = useState('');
   const fileRef = useRef(null);
+  const isInitialized = useRef(false);
+
+  // LocalStorageにデータを保存
+  const saveToStorage = (code, data) => {
+    try {
+      localStorage.setItem(`warikan_${code}`, JSON.stringify(data));
+      setSaveStatus('保存済み');
+      setTimeout(() => setSaveStatus(''), 2000);
+    } catch (e) {
+      console.error('保存エラー:', e);
+    }
+  };
+
+  // LocalStorageからデータを読み込み
+  const loadFromStorage = (code) => {
+    try {
+      const data = localStorage.getItem(`warikan_${code}`);
+      return data ? JSON.parse(data) : null;
+    } catch (e) {
+      console.error('読み込みエラー:', e);
+      return null;
+    }
+  };
+
+  // 初回読み込み
+  useEffect(() => {
+    const code = getCodeFromURL() || sessionCode;
+    const savedData = loadFromStorage(code);
+    
+    if (savedData) {
+      setParticipants(savedData.participants || []);
+      setPayments(savedData.payments || []);
+      setSplitMethod(savedData.splitMethod || 'equal');
+      setFixedAmounts(savedData.fixedAmounts || {});
+      setZeroPayment(savedData.zeroPayment || {});
+    }
+    
+    // URLにコードがなければ追加
+    if (!getCodeFromURL()) {
+      window.history.replaceState({}, '', `${window.location.pathname}?code=${code}`);
+    }
+    
+    setSessionCode(code);
+    setIsLoading(false);
+    isInitialized.current = true;
+  }, []);
+
+  // データ変更時に自動保存
+  useEffect(() => {
+    if (!isInitialized.current) return;
+    
+    const data = {
+      participants,
+      payments: payments.map(p => ({...p, receipt: p.receipt ? '[画像データ]' : null})), // 画像は除外して保存
+      splitMethod,
+      fixedAmounts,
+      zeroPayment,
+      updatedAt: new Date().toISOString()
+    };
+    
+    saveToStorage(sessionCode, data);
+  }, [participants, payments, splitMethod, fixedAmounts, zeroPayment, sessionCode]);
 
   const addParticipant = () => {
     const name = newName.trim();
@@ -57,24 +126,32 @@ export default function App() {
   };
 
   const editPayment = (p) => {
-    setForm({ payerId: p.payerId, desc: p.desc, amount: String(p.amount), inputMode:'free', receipt: p.receipt, receiptName: p.receiptName || '', excluded: [...p.excluded] });
+    setForm({ payerId: p.payerId, desc: p.desc, amount: String(p.amount), inputMode:'free', receipt: p.receipt, receiptName: p.receiptName || '', excluded: [...(p.excluded || [])] });
     setEditingId(p.id); setShowForm(true);
   };
 
   const toggleExcluded = (id) => setForm(f => ({ ...f, excluded: f.excluded.includes(id) ? f.excluded.filter(x=>x!==id) : [...f.excluded, id] }));
 
   const resetAll = () => {
-    if (window.confirm('すべてリセットしますか？')) {
+    if (window.confirm('すべてリセットしますか？新しい精算コードが発行されます。')) {
+      const newCode = generateCode();
+      localStorage.removeItem(`warikan_${sessionCode}`);
       setParticipants([]); setPayments([]); setFixedAmounts({}); setZeroPayment({});
-      setShowResults(false); setShowForm(false); setNewName(''); setSessionCode(generateCode());
+      setShowResults(false); setShowForm(false); setNewName(''); 
+      setSessionCode(newCode);
+      window.history.replaceState({}, '', `${window.location.pathname}?code=${newCode}`);
     }
   };
 
   const calcEqualShares = () => {
-    const shares = {}; participants.forEach(p => shares[p.id] = 0);
+    const shares = {}; 
+    participants.forEach(p => shares[p.id] = 0);
     payments.forEach(pay => {
-      const eligible = participants.filter(p => !pay.excluded.includes(p.id));
-      if (eligible.length > 0) { const share = pay.amount / eligible.length; eligible.forEach(p => shares[p.id] += share); }
+      const eligible = participants.filter(p => !(pay.excluded || []).includes(p.id));
+      if (eligible.length > 0) { 
+        const share = pay.amount / eligible.length; 
+        eligible.forEach(p => shares[p.id] += share); 
+      }
     });
     return shares;
   };
@@ -83,14 +160,50 @@ export default function App() {
     if (participants.length < 2 || payments.length === 0) return null;
     const equalShares = calcEqualShares();
     const totalAmount = payments.reduce((s, p) => s + p.amount, 0);
-    const paid = {}; participants.forEach(p => paid[p.id] = 0); payments.forEach(p => paid[p.payerId] += p.amount);
+    const paid = {}; 
+    participants.forEach(p => paid[p.id] = 0); 
+    payments.forEach(p => paid[p.payerId] += p.amount);
     const shouldPay = {};
-    if (splitMethod === 'equal') participants.forEach(p => shouldPay[p.id] = Math.round(equalShares[p.id]));
-    else participants.forEach(p => { if (zeroPayment[p.id]) shouldPay[p.id] = 0; else if (fixedAmounts[p.id]) shouldPay[p.id] = fixedAmounts[p.id]; else shouldPay[p.id] = Math.round(equalShares[p.id]); });
-    const balance = {}; participants.forEach(p => balance[p.id] = paid[p.id] - shouldPay[p.id]);
+    
+    if (splitMethod === 'equal') {
+      participants.forEach(p => shouldPay[p.id] = Math.round(equalShares[p.id]));
+    } else {
+      let fixedTotal = 0;
+      const unfixedIds = [];
+      participants.forEach(p => {
+        if (zeroPayment[p.id]) {
+          shouldPay[p.id] = 0;
+        } else if (fixedAmounts[p.id] && fixedAmounts[p.id] > 0) {
+          shouldPay[p.id] = fixedAmounts[p.id];
+          fixedTotal += fixedAmounts[p.id];
+        } else {
+          unfixedIds.push(p.id);
+        }
+      });
+      const remaining = totalAmount - fixedTotal;
+      if (unfixedIds.length > 0 && remaining > 0) {
+        let unfixedEqualTotal = 0;
+        unfixedIds.forEach(id => { unfixedEqualTotal += equalShares[id] || 0; });
+        if (unfixedEqualTotal > 0) {
+          unfixedIds.forEach(id => {
+            const ratio = (equalShares[id] || 0) / unfixedEqualTotal;
+            shouldPay[id] = Math.round(remaining * ratio);
+          });
+        } else {
+          const perPerson = Math.round(remaining / unfixedIds.length);
+          unfixedIds.forEach(id => { shouldPay[id] = perPerson; });
+        }
+      } else if (unfixedIds.length > 0) {
+        unfixedIds.forEach(id => { shouldPay[id] = 0; });
+      }
+    }
+    
+    const balance = {}; 
+    participants.forEach(p => balance[p.id] = paid[p.id] - shouldPay[p.id]);
     const creditors = participants.filter(p => balance[p.id] > 0).map(p => ({...p, amt: balance[p.id]})).sort((a,b) => b.amt - a.amt);
     const debtors = participants.filter(p => balance[p.id] < 0).map(p => ({...p, amt: -balance[p.id]})).sort((a,b) => b.amt - a.amt);
-    const settlements = []; let ci = 0, di = 0;
+    const settlements = []; 
+    let ci = 0, di = 0;
     while (ci < creditors.length && di < debtors.length) {
       const amt = Math.min(creditors[ci].amt, debtors[di].amt);
       if (amt > 0) settlements.push({ from: debtors[di].name, to: creditors[ci].name, amount: amt });
@@ -102,15 +215,25 @@ export default function App() {
 
   const results = calculate();
   const equalShares = calcEqualShares();
-  const copyUrl = () => { navigator.clipboard.writeText(`${window.location.origin}?code=${sessionCode}`); setCopied(true); setTimeout(() => setCopied(false), 2000); };
+  
+  const copyUrl = () => { 
+    const url = `${window.location.origin}${window.location.pathname}?code=${sessionCode}`;
+    navigator.clipboard.writeText(url); 
+    setCopied(true); 
+    setTimeout(() => setCopied(false), 2000); 
+  };
 
   const generatePDF = () => {
     if (!results) return alert('精算結果がありません');
     const w = window.open('', '_blank', 'width=800,height=600');
     if (!w) return alert('ポップアップを許可してください');
-    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>精算レポート</title><style>body{font-family:sans-serif;padding:20px;max-width:800px;margin:0 auto}h1{color:#4f46e5}h2{color:#059669;margin-top:30px}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{border:1px solid #ddd;padding:8px}th{background:#f3f4f6}.settlement{background:#d1fae5;padding:15px;border-radius:8px;margin:10px 0}.receipt{max-width:300px}@media print{button{display:none}}</style></head><body><h1>💰 精算レポート</h1><p>精算コード: ${sessionCode}</p><p>作成日: ${new Date().toLocaleString('ja-JP')}</p><h2>基本情報</h2><table><tr><th>合計</th><td>${results.totalAmount.toLocaleString()}円</td></tr><tr><th>参加者</th><td>${participants.map(p=>p.name).join(', ')}</td></tr></table><h2>支払い明細</h2><table><tr><th>内容</th><th>支払者</th><th>金額</th><th>除外</th></tr>${payments.map(p=>`<tr><td>${p.desc}</td><td>${participants.find(x=>x.id===p.payerId)?.name}</td><td>${p.amount.toLocaleString()}円</td><td>${p.excluded.map(id=>participants.find(x=>x.id===id)?.name).join(', ')||'-'}</td></tr>`).join('')}</table><h2>計算</h2><table><tr><th>名前</th><th>支払</th><th>負担</th></tr>${participants.map(p=>`<tr><td>${p.name}</td><td>${(results.paid[p.id]||0).toLocaleString()}円</td><td>${(results.shouldPay[p.id]||0).toLocaleString()}円</td></tr>`).join('')}</table><h2>送金</h2>${results.settlements.length===0?'<p>精算不要</p>':results.settlements.map(s=>`<div class="settlement">${s.from} → ${s.to}: ${s.amount.toLocaleString()}円</div>`).join('')}<h2>レシート</h2>${payments.filter(p=>p.receipt).map(p=>`<div><p>${p.desc}</p>${p.receipt?.startsWith('data:image')?`<img src="${p.receipt}" class="receipt">`:`<p>📄${p.receiptName}</p>`}</div>`).join('')||'<p>なし</p>'}<br><button onclick="window.print()" style="padding:10px 30px;font-size:16px;background:#4f46e5;color:white;border:none;border-radius:8px;cursor:pointer">🖨️ 印刷/PDF保存</button></body></html>`);
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>精算レポート - ${sessionCode}</title><style>body{font-family:sans-serif;padding:20px;max-width:800px;margin:0 auto}h1{color:#4f46e5}h2{color:#059669;margin-top:30px}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{border:1px solid #ddd;padding:8px}th{background:#f3f4f6}.settlement{background:#d1fae5;padding:15px;border-radius:8px;margin:10px 0}.receipt{max-width:300px}@media print{button{display:none}}</style></head><body><h1>💰 精算レポート</h1><p>精算コード: ${sessionCode}</p><p>作成日: ${new Date().toLocaleString('ja-JP')}</p><h2>基本情報</h2><table><tr><th>合計</th><td>${results.totalAmount.toLocaleString()}円</td></tr><tr><th>参加者</th><td>${participants.map(p=>p.name).join(', ')}</td></tr></table><h2>支払い明細</h2><table><tr><th>内容</th><th>支払者</th><th>金額</th><th>除外</th></tr>${payments.map(p=>`<tr><td>${p.desc}</td><td>${participants.find(x=>x.id===p.payerId)?.name||''}</td><td>${p.amount.toLocaleString()}円</td><td>${(p.excluded||[]).map(id=>participants.find(x=>x.id===id)?.name).join(', ')||'-'}</td></tr>`).join('')}</table><h2>計算結果</h2><table><tr><th>名前</th><th>支払</th><th>均等</th><th>負担</th></tr>${participants.map(p=>`<tr><td>${p.name}</td><td>${(results.paid[p.id]||0).toLocaleString()}円</td><td>${Math.round(equalShares[p.id]||0).toLocaleString()}円</td><td>${(results.shouldPay[p.id]||0).toLocaleString()}円</td></tr>`).join('')}</table><h2>送金</h2>${results.settlements.length===0?'<p>精算不要</p>':results.settlements.map(s=>`<div class="settlement">${s.from} → ${s.to}: ${s.amount.toLocaleString()}円</div>`).join('')}<br><button onclick="window.print()" style="padding:10px 30px;font-size:16px;background:#4f46e5;color:white;border:none;border-radius:8px;cursor:pointer">🖨️ 印刷/PDF保存</button></body></html>`);
     w.document.close();
   };
+
+  if (isLoading) {
+    return <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100"><p className="text-lg">読み込み中...</p></div>;
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-2 sm:p-4">
@@ -118,9 +241,15 @@ export default function App() {
         <div className="bg-white rounded-xl shadow-lg p-4">
           <h1 className="text-xl font-bold text-center text-indigo-600 mb-3">💰 割り勘精算アプリ</h1>
           <div className="bg-indigo-50 rounded-lg p-3 mb-4">
-            <span className="text-xs text-gray-500">精算コード</span>
-            <p className="text-xl font-mono font-bold text-indigo-600">{sessionCode}</p>
+            <div className="flex justify-between items-center">
+              <div>
+                <span className="text-xs text-gray-500">精算コード</span>
+                <p className="text-xl font-mono font-bold text-indigo-600">{sessionCode}</p>
+              </div>
+              {saveStatus && <span className="text-xs text-green-600">✓ {saveStatus}</span>}
+            </div>
             <button onClick={copyUrl} className="mt-2 w-full bg-indigo-500 text-white py-2 rounded-lg text-sm">{copied ? '✓ コピー済み' : '📋 共有URLコピー'}</button>
+            <p className="text-xs text-gray-400 mt-1 text-center">※同じURLを開くとデータが共有されます</p>
           </div>
           <div className="mb-4">
             <h2 className="font-semibold mb-2">👥 参加者 ({participants.length}人)</h2>
@@ -152,7 +281,7 @@ export default function App() {
             )}
             {payments.map(p => (
               <div key={p.id} className="bg-gray-50 rounded-lg p-3 mb-2 flex justify-between">
-                <div><p className="font-medium text-sm">{p.desc}</p><p className="text-xs text-gray-500">{participants.find(x => x.id === p.payerId)?.name}が支払い</p><p className="text-sm font-bold text-indigo-600">{p.amount.toLocaleString()}円</p>{p.excluded.length > 0 && <p className="text-xs text-red-500">除外: {p.excluded.map(id => participants.find(x=>x.id===id)?.name).join(', ')}</p>}</div>
+                <div><p className="font-medium text-sm">{p.desc}</p><p className="text-xs text-gray-500">{participants.find(x => x.id === p.payerId)?.name}が支払い</p><p className="text-sm font-bold text-indigo-600">{p.amount.toLocaleString()}円</p>{(p.excluded||[]).length > 0 && <p className="text-xs text-red-500">除外: {(p.excluded||[]).map(id => participants.find(x=>x.id===id)?.name).join(', ')}</p>}</div>
                 <div className="flex flex-col gap-1"><button onClick={() => editPayment(p)} className="text-blue-500 text-xs">✏️編集</button>{p.receipt && <button onClick={() => setViewReceipt(p)} className="text-green-600 text-xs">🧾詳細</button>}<button onClick={() => setPayments(prev => prev.filter(x => x.id !== p.id))} className="text-red-500 text-xs">🗑削除</button></div>
               </div>
             ))}
@@ -161,8 +290,8 @@ export default function App() {
             <h2 className="font-semibold mb-2">⚖️ 割り勘方法</h2>
             <div className="flex gap-2 mb-2"><button onClick={() => setSplitMethod('equal')} className={`flex-1 py-2 rounded-lg text-sm ${splitMethod === 'equal' ? 'bg-indigo-500 text-white' : 'bg-gray-200'}`}>均等割り</button><button onClick={() => setSplitMethod('fixed')} className={`flex-1 py-2 rounded-lg text-sm ${splitMethod === 'fixed' ? 'bg-indigo-500 text-white' : 'bg-gray-200'}`}>傾斜割り勘</button></div>
             {splitMethod === 'fixed' && participants.length > 0 && (
-              <div className="bg-yellow-50 rounded-lg p-3"><p className="text-xs text-gray-400 mb-2">※均等割りの場合（参考）</p><div className="space-y-2">{participants.map(p => (
-                <div key={p.id} className="flex items-center gap-2"><div className="w-20 text-sm font-medium">{p.name}</div><span className="text-xs text-gray-400 w-16">({Math.round(equalShares[p.id]||0).toLocaleString()}円)</span><label className="flex items-center gap-1"><input type="checkbox" checked={zeroPayment[p.id]||false} onChange={e => setZeroPayment({...zeroPayment,[p.id]:e.target.checked})} className="w-4 h-4" /><span className="text-xs">0円</span></label><input type="number" value={fixedAmounts[p.id]||''} onChange={e => setFixedAmounts({...fixedAmounts,[p.id]:Number(e.target.value)})} disabled={zeroPayment[p.id]} placeholder="金額" className="flex-1 border rounded px-2 py-1 text-sm disabled:bg-gray-200" /><span className="text-xs">円</span></div>
+              <div className="bg-yellow-50 rounded-lg p-3"><p className="text-xs text-gray-400 mb-2">※均等割りの場合（参考）/ 未入力者で残額を分配</p><div className="space-y-2">{participants.map(p => (
+                <div key={p.id} className="flex items-center gap-2"><div className="w-20 text-sm font-medium">{p.name}</div><span className="text-xs text-gray-400 w-20">({Math.round(equalShares[p.id]||0).toLocaleString()}円)</span><label className="flex items-center gap-1"><input type="checkbox" checked={zeroPayment[p.id]||false} onChange={e => setZeroPayment({...zeroPayment,[p.id]:e.target.checked})} className="w-4 h-4" /><span className="text-xs">0円</span></label><input type="number" value={fixedAmounts[p.id]||''} onChange={e => setFixedAmounts({...fixedAmounts,[p.id]:Number(e.target.value)})} disabled={zeroPayment[p.id]} placeholder="金額" className="flex-1 border rounded px-2 py-1 text-sm disabled:bg-gray-200" /><span className="text-xs">円</span></div>
               ))}</div></div>
             )}
           </div>

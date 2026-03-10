@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ヒアリングフロー生成ツール</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        primary: { 50:'#eff6ff',100:'#dbeafe',200:'#bfdbfe',300:'#93c5fd',400:'#60a5fa',500:'#3b82f6',600:'#2563eb',700:'#1d4ed8',800:'#1e40af',900:'#1e3a8a' },
+        surface: { light:'#ffffff', dark:'#1e293b' },
+      }
+    }
+  }
+}
+</script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&display=swap');
+  body { font-family: 'Noto Sans JP', sans-serif; }
+  .toast-enter { animation: toastIn .3s ease forwards; }
+  .toast-exit { animation: toastOut .3s ease forwards; }
+  @keyframes toastIn { from{opacity:0;transform:translateY(-20px)} to{opacity:1;transform:translateY(0)} }
+  @keyframes toastOut { from{opacity:1;transform:translateY(0)} to{opacity:0;transform:translateY(-20px)} }
+  .modal-backdrop { animation: fadeIn .2s ease; }
+  @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+  .modal-content { animation: slideUp .25s ease; }
+  @keyframes slideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+  .drag-over { border:2px dashed #3b82f6 !important; background:#eff6ff !important; }
+  .dark .drag-over { background:#1e3a5f !important; }
+  .step-item { transition: all .15s ease; cursor: grab; }
+  .step-item:active { cursor: grabbing; }
+  .step-item.dragging { opacity:.4; }
+  #mermaid-output svg { max-width:100%; height:auto; }
+  ::-webkit-scrollbar { width:6px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:#94a3b8; border-radius:3px; }
+  .dark ::-webkit-scrollbar-thumb { background:#475569; }
+  .conn-item { transition: all .15s ease; }
+</style>
+</head>
+<body class="bg-gray-50 dark:bg-slate-900 text-gray-800 dark:text-gray-200 min-h-screen flex flex-col">
+
+<!-- Toast Container -->
+<div id="toast-container" class="fixed top-4 right-4 z-[9999] flex flex-col gap-2"></div>
+
+<!-- Header -->
+<header class="bg-white dark:bg-slate-800 shadow-sm border-b border-gray-200 dark:border-slate-700 px-4 py-3 flex items-center justify-between flex-shrink-0">
+  <div class="flex items-center gap-3">
+    <div class="w-9 h-9 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center">
+      <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/></svg>
+    </div>
+    <div>
+      <h1 class="text-lg font-bold leading-tight">ヒアリングフロー生成ツール</h1>
+      <p class="text-xs text-gray-500 dark:text-gray-400">顧客ヒアリング → リアルタイムフロー図作成</p>
+    </div>
+  </div>
+  <div class="flex items-center gap-2">
+    <button onclick="openHelpModal()" class="px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-slate-600 hover:bg-gray-100 dark:hover:bg-slate-700 transition">使い方</button>
+    <button onclick="toggleDark()" id="dark-toggle" class="p-2 rounded-lg border border-gray-300 dark:border-slate-600 hover:bg-gray-100 dark:hover:bg-slate-700 transition" title="ダークモード切替">
+      <svg id="icon-sun" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+      <svg id="icon-moon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
+    </button>
+  </div>
+</header>
+
+<!-- Main Content -->
+<main class="flex-1 flex flex-col lg:flex-row overflow-hidden">
+
+  <!-- Left Panel -->
+  <div class="lg:w-[30%] w-full border-r border-gray-200 dark:border-slate-700 flex flex-col overflow-hidden bg-white dark:bg-slate-800">
+    <div class="p-4 overflow-y-auto flex-1 space-y-4">
+      <!-- Project Info -->
+      <div>
+        <label class="block text-sm font-medium mb-1">プロジェクト名</label>
+        <input id="project-name" type="text" class="w-full px-3 py-2 text-sm border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition" placeholder="例：受注管理プロジェクト" oninput="onDataChange()">
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-1">顧客名</label>
+        <input id="customer-name" type="text" class="w-full px-3 py-2 text-sm border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition" placeholder="例：株式会社サンプル" oninput="onDataChange()">
+      </div>
+
+      <!-- Swimlanes -->
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <label class="text-sm font-medium">スイムレーン（部署）</label>
+          <button onclick="addSwimlane()" class="text-xs px-2 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition">＋ 追加</button>
+        </div>
+        <div class="flex gap-2 mb-2">
+          <input id="new-swimlane" type="text" class="flex-1 px-3 py-1.5 text-sm border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="部署名を入力" onkeydown="if(event.key==='Enter')addSwimlane()">
+        </div>
+        <div id="swimlane-list" class="space-y-1"></div>
+      </div>
+
+      <!-- Steps -->
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <label class="text-sm font-medium">ステップ一覧</label>
+          <button onclick="openStepModal()" class="text-xs px-2 py-1 bg-green-500 text-white rounded-md hover:bg-green-600 transition">＋ ステップ追加</button>
+        </div>
+        <div id="step-list" class="space-y-1"></div>
+      </div>
+
+      <!-- Connections -->
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <label class="text-sm font-medium">接続</label>
+          <button onclick="openConnectionModal()" class="text-xs px-2 py-1 bg-purple-500 text-white rounded-md hover:bg-purple-600 transition">＋ 接続追加</button>
+        </div>
+        <div id="connection-list" class="space-y-1"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Center Panel -->
+  <div class="lg:w-[40%] w-full flex flex-col overflow-hidden bg-gray-50 dark:bg-slate-900">
+    <div class="px-4 py-2 border-b border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 flex items-center justify-between">
+      <h2 class="text-sm font-semibold">Mermaid フローチャートプレビュー</h2>
+      <button onclick="copyMermaidCode()" class="text-xs px-2 py-1 border border-gray-300 dark:border-slate-600 rounded-md hover:bg-gray-100 dark:hover:bg-slate-700 transition">Mermaidコードをコピー</button>
+    </div>
+    <div id="mermaid-output" class="flex-1 overflow-auto p-4 flex items-start justify-center">
+      <p class="text-gray-400 text-sm">ステップを追加するとプレビューが表示されます</p>
+    </div>
+  </div>
+
+  <!-- Right Panel -->
+  <div class="lg:w-[30%] w-full border-l border-gray-200 dark:border-slate-700 flex flex-col overflow-hidden bg-white dark:bg-slate-800">
+    <div class="px-4 py-2 border-b border-gray-200 dark:border-slate-700 flex items-center justify-between">
+      <h2 class="text-sm font-semibold">draw.io XML 出力</h2>
+    </div>
+    <div class="flex-1 p-4 flex flex-col gap-3 overflow-hidden">
+      <textarea id="xml-output" class="flex-1 w-full text-xs font-mono p-3 border border-gray-300 dark:border-slate-600 rounded-lg bg-gray-50 dark:bg-slate-900 resize-none focus:ring-2 focus:ring-blue-500 outline-none" placeholder="draw.io XMLがここに表示されます" readonly></textarea>
+      <div class="grid grid-cols-2 gap-2">
+        <button onclick="copyXml()" class="px-3 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition flex items-center justify-center gap-1">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/></svg>
+          XMLコピー
+        </button>
+        <button onclick="downloadDrawio()" class="px-3 py-2 text-sm bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition flex items-center justify-center gap-1">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          .drawioダウンロード
+        </button>
+        <button onclick="openInDiagramsNet()" class="px-3 py-2 text-sm bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition flex items-center justify-center gap-1">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+          diagrams.netで開く
+        </button>
+        <button onclick="resetAll()" class="px-3 py-2 text-sm bg-red-500 text-white rounded-lg hover:bg-red-600 transition flex items-center justify-center gap-1">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+          リセット
+        </button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- Step Modal -->
+<div id="step-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
+  <div class="modal-backdrop absolute inset-0 bg-black/40" onclick="closeStepModal()"></div>
+  <div class="modal-content relative bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-md mx-4 z-10">
+    <h3 class="text-lg font-bold mb-4" id="step-modal-title">ステップ追加</h3>
+    <div class="space-y-3">
+      <div>
+        <label class="block text-sm font-medium mb-1">ステップ名 <span class="text-red-500">*</span></label>
+        <input id="step-name" type="text" class="w-full px-3 py-2 text-sm border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="例：見積提出">
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-1">担当スイムレーン</label>
+        <select id="step-swimlane" class="w-full px-3 py-2 text-sm border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"></select>
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-1">タイプ</label>
+        <select id="step-type" class="w-full px-3 py-2 text-sm border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 focus:ring-2 focus:ring-blue-500 outline-none">
+          <option value="start">開始</option>
+          <option value="process" selected>通常プロセス</option>
+          <option value="decision">決定</option>
+          <option value="end">終了</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-1">説明</label>
+        <textarea id="step-desc" rows="2" class="w-full px-3 py-2 text-sm border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 focus:ring-2 focus:ring-blue-500 outline-none resize-none" placeholder="任意の説明"></textarea>
+      </div>
+    </div>
+    <div class="flex justify-end gap-2 mt-5">
+      <button onclick="closeStepModal()" class="px-4 py-2 text-sm rounded-lg border border-gray-300 dark:border-slate-600 hover:bg-gray-100 dark:hover:bg-slate-700 transition">キャンセル</button>
+      <button onclick="saveStep()" class="px-4 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Connection Modal -->
+<div id="conn-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
+  <div class="modal-backdrop absolute inset-0 bg-black/40" onclick="closeConnectionModal()"></div>
+  <div class="modal-content relative bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-md mx-4 z-10">
+    <h3 class="text-lg font-bold mb-4">接続追加</h3>
+    <div class="space-y-3">
+      <div>
+        <label class="block text-sm font-medium mb-1">From（元ステップ）</label>
+        <select id="conn-from" class="w-full px-3 py-2 text-sm border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"></select>
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-1">To（先ステップ）</label>
+        <select id="conn-to" class="w-full px-3 py-2 text-sm border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"></select>
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-1">条件ラベル（任意）</label>
+        <input id="conn-label" type="text" class="w-full px-3 py-2 text-sm border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="例：はい / いいえ">
+      </div>
+    </div>
+    <div class="flex justify-end gap-2 mt-5">
+      <button onclick="closeConnectionModal()" class="px-4 py-2 text-sm rounded-lg border border-gray-300 dark:border-slate-600 hover:bg-gray-100 dark:hover:bg-slate-700 transition">キャンセル</button>
+      <button onclick="saveConnection()" class="px-4 py-2 text-sm bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition">追加</button>
+    </div>
+  </div>
+</div>
+
+<!-- Help Modal -->
+<div id="help-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
+  <div class="modal-backdrop absolute inset-0 bg-black/40" onclick="closeHelpModal()"></div>
+  <div class="modal-content relative bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-lg mx-4 z-10 max-h-[80vh] overflow-y-auto">
+    <h3 class="text-lg font-bold mb-4">使い方ガイド</h3>
+    <div class="space-y-3 text-sm text-gray-600 dark:text-gray-300">
+      <div class="p-3 bg-blue-50 dark:bg-slate-700 rounded-lg">
+        <p class="font-semibold text-blue-700 dark:text-blue-300 mb-1">1. プロジェクト情報を入力</p>
+        <p>プロジェクト名と顧客名を入力します。</p>
+      </div>
+      <div class="p-3 bg-green-50 dark:bg-slate-700 rounded-lg">
+        <p class="font-semibold text-green-700 dark:text-green-300 mb-1">2. スイムレーン（部署）を追加</p>
+        <p>関連する部署名を追加します。フロー図のグループ分けに使用されます。</p>
+      </div>
+      <div class="p-3 bg-purple-50 dark:bg-slate-700 rounded-lg">
+        <p class="font-semibold text-purple-700 dark:text-purple-300 mb-1">3. ステップを追加</p>
+        <p>「ステップ追加」ボタンから各工程を追加します。タイプ（開始/プロセス/決定/終了）を選択できます。</p>
+      </div>
+      <div class="p-3 bg-amber-50 dark:bg-slate-700 rounded-lg">
+        <p class="font-semibold text-amber-700 dark:text-amber-300 mb-1">4. 接続を定義</p>
+        <p>「接続追加」ボタンでステップ間の流れを定義します。決定ステップには条件ラベル（はい/いいえ等）を設定できます。</p>
+      </div>
+      <div class="p-3 bg-rose-50 dark:bg-slate-700 rounded-lg">
+        <p class="font-semibold text-rose-700 dark:text-rose-300 mb-1">5. 出力を利用</p>
+        <p>中央パネルでMermaidプレビューを確認し、右パネルからdraw.io XMLをコピーまたはダウンロードできます。</p>
+      </div>
+      <div class="p-3 bg-gray-100 dark:bg-slate-700 rounded-lg">
+        <p class="font-semibold mb-1">ヒント</p>
+        <ul class="list-disc ml-4 space-y-1">
+          <li>ステップはドラッグ&ドロップで並び替え可能です</li>
+          <li>データはlocalStorageに自動保存されます</li>
+          <li>ダークモードはヘッダーの月/太陽アイコンで切り替えできます</li>
+        </ul>
+      </div>
+    </div>
+    <div class="flex justify-end mt-5">
+      <button onclick="closeHelpModal()" class="px-4 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== State =====
+const STORAGE_KEY = 'hearing-flow-generator-data';
+let state = {
+  projectName: '',
+  customerName: '',
+  swimlanes: [],
+  steps: [],
+  connections: [],
+  nextStepId: 1
+};
+let editingStepId = null;
+let dragSrcIndex = null;
+
+// ===== Init =====
+function init() {
+  mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose', flowchart: { useMaxWidth: true, htmlLabels: true } });
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved) {
+    try {
+      state = JSON.parse(saved);
+    } catch(e) {
+      loadSampleData();
+    }
+  } else {
+    loadSampleData();
+  }
+  applyDarkMode();
+  renderAll();
+}
+
+function loadSampleData() {
+  state = {
+    projectName: '受注管理プロジェクト',
+    customerName: '株式会社サンプル',
+    swimlanes: ['営業部', '顧客サポート部', '経理部'],
+    steps: [
+      { id: 'S1', name: '案件受付', swimlane: '営業部', type: 'start', desc: '顧客から問い合わせを受ける' },
+      { id: 'S2', name: '見積作成', swimlane: '営業部', type: 'process', desc: '見積書を作成する' },
+      { id: 'S3', name: '見積承認', swimlane: '顧客サポート部', type: 'decision', desc: '顧客が見積を確認' },
+      { id: 'S4', name: '受注確定', swimlane: '営業部', type: 'process', desc: '受注を確定する' },
+      { id: 'S5', name: '見積修正', swimlane: '営業部', type: 'process', desc: '見積内容を修正する' },
+      { id: 'S6', name: '請求書発行', swimlane: '経理部', type: 'process', desc: '請求書を発行する' },
+      { id: 'S7', name: '完了', swimlane: '経理部', type: 'end', desc: 'プロセス終了' }
+    ],
+    connections: [
+      { from: 'S1', to: 'S2', label: '' },
+      { from: 'S2', to: 'S3', label: '' },
+      { from: 'S3', to: 'S4', label: 'はい' },
+      { from: 'S3', to: 'S5', label: 'いいえ' },
+      { from: 'S5', to: 'S2', label: '' },
+      { from: 'S4', to: 'S6', label: '' },
+      { from: 'S6', to: 'S7', label: '' }
+    ],
+    nextStepId: 8
+  };
+}
+
+// ===== Dark Mode =====
+function applyDarkMode() {
+  const isDark = localStorage.getItem('dark-mode') === 'true';
+  document.documentElement.classList.toggle('dark', isDark);
+  document.getElementById('icon-sun').classList.toggle('hidden', !isDark);
+  document.getElementById('icon-moon').classList.toggle('hidden', isDark);
+}
+function toggleDark() {
+  const isDark = document.documentElement.classList.toggle('dark');
+  localStorage.setItem('dark-mode', isDark);
+  document.getElementById('icon-sun').classList.toggle('hidden', !isDark);
+  document.getElementById('icon-moon').classList.toggle('hidden', isDark);
+  renderMermaid();
+}
+
+// ===== Save/Render =====
+function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+function onDataChange() {
+  state.projectName = document.getElementById('project-name').value;
+  state.customerName = document.getElementById('customer-name').value;
+  saveState();
+  renderMermaid();
+  renderDrawioXml();
+}
+function renderAll() {
+  document.getElementById('project-name').value = state.projectName;
+  document.getElementById('customer-name').value = state.customerName;
+  renderSwimlanes();
+  renderSteps();
+  renderConnections();
+  renderMermaid();
+  renderDrawioXml();
+}
+
+// ===== Toast =====
+function showToast(msg, type='success') {
+  const c = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  const colors = { success:'bg-green-500', error:'bg-red-500', info:'bg-blue-500' };
+  t.className = `toast-enter ${colors[type]||colors.info} text-white px-4 py-2 rounded-lg shadow-lg text-sm font-medium max-w-xs`;
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(() => { t.classList.replace('toast-enter','toast-exit'); setTimeout(() => t.remove(), 300); }, 2500);
+}
+
+// ===== Swimlanes =====
+function addSwimlane() {
+  const input = document.getElementById('new-swimlane');
+  const name = input.value.trim();
+  if (!name) { showToast('部署名を入力してください', 'error'); return; }
+  if (state.swimlanes.includes(name)) { showToast('同じ部署名が既に存在します', 'error'); return; }
+  state.swimlanes.push(name);
+  input.value = '';
+  saveState();
+  renderSwimlanes();
+  renderMermaid();
+  renderDrawioXml();
+}
+function removeSwimlane(idx) {
+  const name = state.swimlanes[idx];
+  state.steps = state.steps.filter(s => s.swimlane !== name);
+  state.swimlanes.splice(idx, 1);
+  // clean up orphan connections
+  const stepIds = new Set(state.steps.map(s => s.id));
+  state.connections = state.connections.filter(c => stepIds.has(c.from) && stepIds.has(c.to));
+  saveState();
+  renderAll();
+}
+function renderSwimlanes() {
+  const el = document.getElementById('swimlane-list');
+  el.innerHTML = state.swimlanes.map((s,i) => `
+    <div class="flex items-center justify-between px-3 py-1.5 bg-gray-100 dark:bg-slate-700 rounded-md text-sm">
+      <span class="truncate">${esc(s)}</span>
+      <button onclick="removeSwimlane(${i})" class="text-red-400 hover:text-red-600 ml-2 flex-shrink-0" title="削除">&times;</button>
+    </div>
+  `).join('');
+}
+
+// ===== Steps =====
+function openStepModal(editId) {
+  editingStepId = editId || null;
+  const modal = document.getElementById('step-modal');
+  document.getElementById('step-modal-title').textContent = editId ? 'ステップ編集' : 'ステップ追加';
+  // populate swimlane select
+  const sel = document.getElementById('step-swimlane');
+  sel.innerHTML = state.swimlanes.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+  if (state.swimlanes.length === 0) sel.innerHTML = '<option value="">（スイムレーンを先に追加）</option>';
+  if (editId) {
+    const step = state.steps.find(s => s.id === editId);
+    if (step) {
+      document.getElementById('step-name').value = step.name;
+      sel.value = step.swimlane;
+      document.getElementById('step-type').value = step.type;
+      document.getElementById('step-desc').value = step.desc;
+    }
+  } else {
+    document.getElementById('step-name').value = '';
+    document.getElementById('step-type').value = 'process';
+    document.getElementById('step-desc').value = '';
+  }
+  modal.classList.remove('hidden');
+}
+function closeStepModal() { document.getElementById('step-modal').classList.add('hidden'); editingStepId = null; }
+function saveStep() {
+  const name = document.getElementById('step-name').value.trim();
+  if (!name) { showToast('ステップ名を入力してください', 'error'); return; }
+  const swimlane = document.getElementById('step-swimlane').value;
+  if (!swimlane) { showToast('スイムレーンを先に追加してください', 'error'); return; }
+  const type = document.getElementById('step-type').value;
+  const desc = document.getElementById('step-desc').value.trim();
+  if (editingStepId) {
+    const step = state.steps.find(s => s.id === editingStepId);
+    if (step) { step.name = name; step.swimlane = swimlane; step.type = type; step.desc = desc; }
+  } else {
+    state.steps.push({ id: 'S' + state.nextStepId++, name, swimlane, type, desc });
+  }
+  saveState();
+  closeStepModal();
+  renderSteps();
+  renderConnections();
+  renderMermaid();
+  renderDrawioXml();
+}
+function removeStep(id) {
+  state.steps = state.steps.filter(s => s.id !== id);
+  state.connections = state.connections.filter(c => c.from !== id && c.to !== id);
+  saveState();
+  renderSteps();
+  renderConnections();
+  renderMermaid();
+  renderDrawioXml();
+}
+function renderSteps() {
+  const el = document.getElementById('step-list');
+  const typeIcons = { start:'🟢', process:'🔷', decision:'🔶', end:'🔴' };
+  const typeLabels = { start:'開始', process:'プロセス', decision:'決定', end:'終了' };
+  el.innerHTML = state.steps.map((s,i) => `
+    <div class="step-item flex items-center gap-2 px-3 py-2 bg-gray-100 dark:bg-slate-700 rounded-md text-sm group" draggable="true" data-index="${i}">
+      <span class="cursor-grab text-gray-400 select-none" title="ドラッグで並び替え">⠿</span>
+      <span class="text-xs font-mono text-gray-500 dark:text-gray-400">${s.id}</span>
+      <span title="${typeLabels[s.type]}">${typeIcons[s.type]||'🔷'}</span>
+      <span class="truncate flex-1 font-medium">${esc(s.name)}</span>
+      <span class="text-xs text-gray-400 truncate max-w-[80px]">${esc(s.swimlane)}</span>
+      <button onclick="openStepModal('${s.id}')" class="text-blue-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition" title="編集">✎</button>
+      <button onclick="removeStep('${s.id}')" class="text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition" title="削除">&times;</button>
+    </div>
+  `).join('');
+  // Drag and drop
+  el.querySelectorAll('.step-item').forEach(item => {
+    item.addEventListener('dragstart', e => { dragSrcIndex = +item.dataset.index; item.classList.add('dragging'); });
+    item.addEventListener('dragend', () => { item.classList.remove('dragging'); document.querySelectorAll('.drag-over').forEach(d => d.classList.remove('drag-over')); });
+    item.addEventListener('dragover', e => { e.preventDefault(); item.classList.add('drag-over'); });
+    item.addEventListener('dragleave', () => { item.classList.remove('drag-over'); });
+    item.addEventListener('drop', e => {
+      e.preventDefault();
+      item.classList.remove('drag-over');
+      const targetIndex = +item.dataset.index;
+      if (dragSrcIndex !== null && dragSrcIndex !== targetIndex) {
+        const [moved] = state.steps.splice(dragSrcIndex, 1);
+        state.steps.splice(targetIndex, 0, moved);
+        saveState();
+        renderSteps();
+        renderMermaid();
+        renderDrawioXml();
+      }
+    });
+  });
+}
+
+// ===== Connections =====
+function openConnectionModal() {
+  if (state.steps.length < 2) { showToast('接続を作成するにはステップが2つ以上必要です', 'error'); return; }
+  const fromSel = document.getElementById('conn-from');
+  const toSel = document.getElementById('conn-to');
+  const opts = state.steps.map(s => `<option value="${s.id}">${s.id}: ${esc(s.name)}</option>`).join('');
+  fromSel.innerHTML = opts;
+  toSel.innerHTML = opts;
+  if (state.steps.length > 1) toSel.value = state.steps[1].id;
+  document.getElementById('conn-label').value = '';
+  document.getElementById('conn-modal').classList.remove('hidden');
+}
+function closeConnectionModal() { document.getElementById('conn-modal').classList.add('hidden'); }
+function saveConnection() {
+  const from = document.getElementById('conn-from').value;
+  const to = document.getElementById('conn-to').value;
+  const label = document.getElementById('conn-label').value.trim();
+  if (from === to) { showToast('同じステップへの接続はできません', 'error'); return; }
+  if (state.connections.some(c => c.from === from && c.to === to && c.label === label)) { showToast('同一の接続が既に存在します', 'error'); return; }
+  state.connections.push({ from, to, label });
+  saveState();
+  closeConnectionModal();
+  renderConnections();
+  renderMermaid();
+  renderDrawioXml();
+}
+function removeConnection(idx) {
+  state.connections.splice(idx, 1);
+  saveState();
+  renderConnections();
+  renderMermaid();
+  renderDrawioXml();
+}
+function renderConnections() {
+  const el = document.getElementById('connection-list');
+  el.innerHTML = state.connections.map((c,i) => {
+    const fromStep = state.steps.find(s => s.id === c.from);
+    const toStep = state.steps.find(s => s.id === c.to);
+    return `
+    <div class="conn-item flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-slate-700 rounded-md text-sm group">
+      <span class="truncate">${c.from}:${esc(fromStep?.name||'?')}</span>
+      <span class="text-gray-400">→</span>
+      <span class="truncate">${c.to}:${esc(toStep?.name||'?')}</span>
+      ${c.label ? `<span class="text-xs px-1.5 py-0.5 bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300 rounded">${esc(c.label)}</span>` : ''}
+      <span class="flex-1"></span>
+      <button onclick="removeConnection(${i})" class="text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition">&times;</button>
+    </div>`;
+  }).join('');
+}
+
+// ===== Mermaid Generation =====
+let mermaidCounter = 0;
+function generateMermaidCode() {
+  if (state.steps.length === 0) return '';
+  const lines = ['flowchart TD'];
+  // Group steps by swimlane
+  const groups = {};
+  state.swimlanes.forEach(sl => { groups[sl] = []; });
+  state.steps.forEach(s => {
+    if (!groups[s.swimlane]) groups[s.swimlane] = [];
+    groups[s.swimlane].push(s);
+  });
+  // Build subgraphs
+  for (const [lane, steps] of Object.entries(groups)) {
+    if (steps.length === 0) continue;
+    lines.push(`    subgraph ${sanitizeMermaid(lane)}`);
+    steps.forEach(s => {
+      const label = sanitizeMermaid(s.name);
+      switch(s.type) {
+        case 'start': lines.push(`        ${s.id}([${label}])`); break;
+        case 'end': lines.push(`        ${s.id}([${label}])`); break;
+        case 'decision': lines.push(`        ${s.id}{${label}}`); break;
+        default: lines.push(`        ${s.id}[${label}]`); break;
+      }
+    });
+    lines.push('    end');
+  }
+  // Connections
+  state.connections.forEach(c => {
+    if (c.label) {
+      lines.push(`    ${c.from} -->|${sanitizeMermaid(c.label)}| ${c.to}`);
+    } else {
+      lines.push(`    ${c.from} --> ${c.to}`);
+    }
+  });
+  return lines.join('\n');
+}
+
+function sanitizeMermaid(text) {
+  return text.replace(/[[\]{}()|<>]/g, ' ').replace(/"/g, "'").trim();
+}
+
+async function renderMermaid() {
+  const code = generateMermaidCode();
+  const output = document.getElementById('mermaid-output');
+  if (!code) {
+    output.innerHTML = '<p class="text-gray-400 text-sm">ステップを追加するとプレビューが表示されます</p>';
+    return;
+  }
+  try {
+    const id = 'mermaid-svg-' + (++mermaidCounter);
+    const isDark = document.documentElement.classList.contains('dark');
+    mermaid.initialize({ startOnLoad: false, theme: isDark ? 'dark' : 'default', securityLevel: 'loose', flowchart: { useMaxWidth: true, htmlLabels: true } });
+    const { svg } = await mermaid.render(id, code);
+    output.innerHTML = svg;
+  } catch(e) {
+    output.innerHTML = `<div class="text-red-400 text-sm p-4"><p class="font-semibold mb-2">Mermaid レンダリングエラー</p><pre class="text-xs bg-red-50 dark:bg-red-900/30 p-2 rounded overflow-auto">${esc(e.message||String(e))}</pre><pre class="text-xs mt-2 bg-gray-100 dark:bg-slate-800 p-2 rounded overflow-auto">${esc(code)}</pre></div>`;
+  }
+}
+
+// ===== draw.io XML Generation =====
+function generateDrawioXml() {
+  if (state.steps.length === 0) return '';
+  const cellId = (() => { let n = 2; return () => n++; })();
+
+  // Layout constants
+  const LANE_WIDTH = 200;
+  const LANE_HEADER = 40;
+  const STEP_W = 140;
+  const STEP_H = 50;
+  const DECISION_W = 120;
+  const DECISION_H = 80;
+  const PAD_X = 30;
+  const PAD_Y = 20;
+  const STEP_GAP = 30;
+
+  // Group steps by swimlane
+  const laneSteps = {};
+  state.swimlanes.forEach(sl => { laneSteps[sl] = []; });
+  state.steps.forEach(s => {
+    if (!laneSteps[s.swimlane]) laneSteps[s.swimlane] = [];
+    laneSteps[s.swimlane].push(s);
+  });
+
+  // Calculate positions
+  const stepPositions = {};
+  let laneX = 0;
+  const laneRects = {};
+  for (const lane of state.swimlanes) {
+    const steps = laneSteps[lane] || [];
+    let maxY = LANE_HEADER + PAD_Y;
+    steps.forEach((s, i) => {
+      const w = s.type === 'decision' ? DECISION_W : STEP_W;
+      const h = s.type === 'decision' ? DECISION_H : STEP_H;
+      const x = laneX + PAD_X + (LANE_WIDTH - 2*PAD_X - w) / 2;
+      const y = maxY;
+      stepPositions[s.id] = { x, y, w, h };
+      maxY = y + h + STEP_GAP;
+    });
+    const laneH = Math.max(maxY + PAD_Y, 150);
+    laneRects[lane] = { x: laneX, y: 0, w: LANE_WIDTH, h: laneH };
+    laneX += LANE_WIDTH;
+  }
+
+  // Normalize heights
+  const maxH = Math.max(...Object.values(laneRects).map(r => r.h));
+  Object.values(laneRects).forEach(r => r.h = maxH);
+
+  let cells = '';
+  const idMap = {};
+
+  // Swimlane cells
+  for (const lane of state.swimlanes) {
+    const r = laneRects[lane];
+    const id = cellId();
+    cells += `<mxCell id="${id}" value="${escXml(lane)}" style="swimlane;startSize=${LANE_HEADER};fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=13;" vertex="1" parent="1"><mxGeometry x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" as="geometry"/></mxCell>\n`;
+  }
+
+  // Step cells
+  state.steps.forEach(s => {
+    const p = stepPositions[s.id];
+    if (!p) return;
+    const id = cellId();
+    idMap[s.id] = id;
+    let style = '';
+    switch(s.type) {
+      case 'start':
+        style = 'rounded=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;';
+        break;
+      case 'end':
+        style = 'rounded=1;whiteSpace=wrap;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;';
+        break;
+      case 'decision':
+        style = 'rhombus;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;';
+        break;
+      default:
+        style = 'rounded=0;whiteSpace=wrap;fillColor=#e1d5e7;strokeColor=#9673a6;';
+    }
+    cells += `<mxCell id="${id}" value="${escXml(s.name)}" style="${style}" vertex="1" parent="1"><mxGeometry x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" as="geometry"/></mxCell>\n`;
+  });
+
+  // Connection cells
+  state.connections.forEach(c => {
+    const srcId = idMap[c.from];
+    const tgtId = idMap[c.to];
+    if (!srcId || !tgtId) return;
+    const id = cellId();
+    const labelAttr = c.label ? ` value="${escXml(c.label)}"` : '';
+    cells += `<mxCell id="${id}"${labelAttr} style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=11;" edge="1" source="${srcId}" target="${tgtId}" parent="1"><mxGeometry relative="1" as="geometry"/></mxCell>\n`;
+  });
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="${new Date().toISOString()}" type="device">
+  <diagram id="flow1" name="${escXml(state.projectName || 'フロー図')}">
+    <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+${cells}      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>`;
+}
+
+function renderDrawioXml() {
+  document.getElementById('xml-output').value = generateDrawioXml();
+}
+
+// ===== Actions =====
+function copyMermaidCode() {
+  const code = generateMermaidCode();
+  if (!code) { showToast('コピーするコードがありません', 'error'); return; }
+  navigator.clipboard.writeText(code).then(() => showToast('Mermaidコードをコピーしました'));
+}
+function copyXml() {
+  const xml = document.getElementById('xml-output').value;
+  if (!xml) { showToast('コピーするXMLがありません', 'error'); return; }
+  navigator.clipboard.writeText(xml).then(() => showToast('XMLをクリップボードにコピーしました'));
+}
+function downloadDrawio() {
+  const xml = document.getElementById('xml-output').value;
+  if (!xml) { showToast('ダウンロードするデータがありません', 'error'); return; }
+  const name = (state.projectName || 'flow') + '.drawio';
+  const blob = new Blob([xml], { type: 'application/xml' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  showToast(`${name} をダウンロードしました`);
+}
+function openInDiagramsNet() {
+  const xml = document.getElementById('xml-output').value;
+  if (!xml) { showToast('XMLがありません', 'error'); return; }
+  navigator.clipboard.writeText(xml).then(() => {
+    window.open('https://app.diagrams.net/', '_blank');
+    showToast('XMLをコピーしました。diagrams.net で「ファイル → XMLをインポート」してください', 'info');
+  });
+}
+function resetAll() {
+  if (!confirm('すべてのデータをリセットしますか？サンプルデータが読み込まれます。')) return;
+  localStorage.removeItem(STORAGE_KEY);
+  loadSampleData();
+  renderAll();
+  showToast('データをリセットしました');
+}
+
+// ===== Help Modal =====
+function openHelpModal() { document.getElementById('help-modal').classList.remove('hidden'); }
+function closeHelpModal() { document.getElementById('help-modal').classList.add('hidden'); }
+
+// ===== Util =====
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function escXml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;'); }
+
+// ===== Start =====
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>

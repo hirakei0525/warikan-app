@@ -1,113 +1,47 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 
-const JSONBIN_KEY = '$2a$10$7d90hiCCptuoBNJLlUFKluO72mrhvXh5Wd0vgf.KkZV9M0z7ZM6AC';
-const API_URL = 'https://api.jsonbin.io/v3/b';
 const generateCode = () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'.split('').sort(() => Math.random() - 0.5).slice(0, 8).join('');
 const getParam = (key) => new URLSearchParams(window.location.search).get(key);
 const amountOptions = [500,1000,1500,2000,2500,3000,3500,4000,4500,5000,5500,6000,6500,7000,7500,8000,8500,9000,9500,10000];
 
-// JSONBin API（検索機能強化）
 const api = {
-  async findBinByCode(code) {
-    try {
-      const res = await fetch('https://api.jsonbin.io/v3/c/uncategorized/bins', {
-        headers: { 'X-Master-Key': JSONBIN_KEY }
-      });
-      if (!res.ok) return null;
-      const bins = await res.json();
-      const found = bins.find?.(b => b.snippetMeta?.name === code);
-      return found?.id || null;
-    } catch { return null; }
-  },
-
   async save(code, data) {
     try {
-      let binId = localStorage.getItem(`bin_${code}`);
-      if (!binId) {
-        binId = await this.findBinByCode(code);
-        if (binId) localStorage.setItem(`bin_${code}`, binId);
-      }
-      const payload = { code, ...data, updatedAt: Date.now() };
-      if (binId) {
-        await fetch(`${API_URL}/${binId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY },
-          body: JSON.stringify(payload)
-        });
-      } else {
-        const res = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY, 'X-Bin-Name': code },
-          body: JSON.stringify(payload)
-        });
-        const json = await res.json();
-        if (json.metadata?.id) localStorage.setItem(`bin_${code}`, json.metadata.id);
-      }
-      return true;
+      const r = await fetch(`/api/bins/${encodeURIComponent(code)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      return r.ok;
     } catch (e) { console.error('Save error:', e); return false; }
   },
 
   async load(code) {
     try {
-      let binId = localStorage.getItem(`bin_${code}`);
-      if (!binId) {
-        binId = await this.findBinByCode(code);
-        if (binId) localStorage.setItem(`bin_${code}`, binId);
-      }
-      if (!binId) return null;
-      const res = await fetch(`${API_URL}/${binId}/latest`, {
-        headers: { 'X-Master-Key': JSONBIN_KEY }
-      });
-      if (!res.ok) return null;
-      const json = await res.json();
-      return json.record;
+      const r = await fetch(`/api/bins/${encodeURIComponent(code)}`);
+      if (r.status === 404) return null;
+      if (!r.ok) return null;
+      return await r.json();
     } catch (e) { console.error('Load error:', e); return null; }
   },
 
-  // レポートBin保存（別名で管理）
   async saveReport(reportCode, data) {
     try {
-      const binName = `RPT_${reportCode}`;
-      let binId = localStorage.getItem(`bin_${binName}`);
-      if (!binId) {
-        binId = await this.findBinByCode(binName);
-        if (binId) localStorage.setItem(`bin_${binName}`, binId);
-      }
-      const payload = { reportCode, ...data, createdAt: Date.now() };
-      if (binId) {
-        await fetch(`${API_URL}/${binId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY },
-          body: JSON.stringify(payload)
-        });
-      } else {
-        const res = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY, 'X-Bin-Name': binName },
-          body: JSON.stringify(payload)
-        });
-        const json = await res.json();
-        if (json.metadata?.id) localStorage.setItem(`bin_${binName}`, json.metadata.id);
-      }
-      return true;
+      const r = await fetch(`/api/reports/${encodeURIComponent(reportCode)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      return r.ok;
     } catch (e) { console.error('SaveReport error:', e); return false; }
   },
 
   async loadReport(reportCode) {
     try {
-      const binName = `RPT_${reportCode}`;
-      let binId = localStorage.getItem(`bin_${binName}`);
-      if (!binId) {
-        binId = await this.findBinByCode(binName);
-        if (binId) localStorage.setItem(`bin_${binName}`, binId);
-      }
-      if (!binId) return null;
-      const res = await fetch(`${API_URL}/${binId}/latest`, {
-        headers: { 'X-Master-Key': JSONBIN_KEY }
-      });
-      if (!res.ok) return null;
-      const json = await res.json();
-      return json.record;
+      const r = await fetch(`/api/reports/${encodeURIComponent(reportCode)}`);
+      if (r.status === 404) return null;
+      if (!r.ok) return null;
+      return await r.json();
     } catch (e) { console.error('LoadReport error:', e); return null; }
   }
 };
@@ -400,6 +334,7 @@ export default function App() {
   const [editingSettlement, setEditingSettlement] = useState(null);
   const [customSettlements, setCustomSettlements] = useState([]);
   const [showShareModal, setShowShareModal] = useState(false);
+  const [notFound, setNotFound] = useState(false);
   const fileRef = useRef(null);
   const init = useRef(false);
   const saveTimer = useRef(null);
@@ -419,13 +354,30 @@ export default function App() {
         setCollector(data.collector || '');
         setCustomSettlements(data.customSettlements || []);
         setLastSync(data.updatedAt);
+        init.current = true;
+      } else if (urlCode) {
+        setNotFound(true);
+      } else {
+        init.current = true;
       }
       if (!urlCode) window.history.replaceState({}, '', `?code=${c}`);
       setLoading(false);
-      init.current = true;
     };
     load();
   }, []);
+
+  const startNewSession = () => {
+    setNotFound(false);
+    init.current = true;
+  };
+
+  const startWithFreshCode = () => {
+    const newCode = generateCode();
+    setCode(newCode);
+    window.history.replaceState({}, '', `?code=${newCode}`);
+    setNotFound(false);
+    init.current = true;
+  };
 
   const saveData = useCallback(async () => {
     if (!init.current) return;
@@ -677,7 +629,7 @@ export default function App() {
     w.document.close();
   };
 
-  // レポートURLを生成してJSONBinに保存
+  // レポートURLを生成してKVに保存
   const handleShareReport = async (pw) => {
     if (!res) return '';
     const finalSettlements = customSettlements.length > 0 ? customSettlements : settlements;
@@ -717,6 +669,26 @@ export default function App() {
       <div className="text-center">
         <p className="text-lg mb-2">読み込み中...</p>
         <p className="text-sm text-gray-500">精算コード: {code}</p>
+      </div>
+    </div>
+  );
+
+  if (notFound) return (
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+      <div className="bg-white rounded-xl p-6 shadow-lg max-w-sm w-full">
+        <h2 className="text-lg font-bold text-center mb-2">🔍 セッションが見つかりません</h2>
+        <p className="text-xs text-center text-gray-500 mb-4">
+          コード <span className="font-mono font-bold">{code}</span> のデータはサーバに存在しません。<br />
+          URLが正しいか、共有元の方に確認してください。
+        </p>
+        <div className="space-y-2">
+          <button onClick={startNewSession} className="w-full bg-indigo-500 text-white py-2 rounded-lg text-sm font-semibold">
+            このコードで新しい精算を始める
+          </button>
+          <button onClick={startWithFreshCode} className="w-full bg-gray-200 py-2 rounded-lg text-sm">
+            新しいコードを発行する
+          </button>
+        </div>
       </div>
     </div>
   );
